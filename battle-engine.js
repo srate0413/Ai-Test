@@ -27,7 +27,7 @@ function create(role,identity,opts={}){const p=profiles[role]||profiles.worker;r
 function available(b){return skills.filter(s=>!s.identity||s.identity===b.identity).map(s=>({...s,disabled:b.phase!=='player'||b.energy<s.cost||(b.cooldowns[s.id]||0)>0||(s.id==='coupon'&&b.coupons<1)||(s.id==='water'&&b.waters<1)||(s.id==='ultimate'&&b.morale<100)||(s.id==='evidence'&&b.evidence<1),cooldown:b.cooldowns[s.id]||0}))}
 function intent(b){const m=[...b.profile.moves[b.moveIndex%b.profile.moves.length]];if(b.stage===2&&m[1]){m[0]='绩效暴走 · '+m[0];m[1]+=8}return m}
 function add(b,t){b.messages.unshift(t);b.messages=b.messages.slice(0,7)}
-function takeTurn(b,id){const s=available(b).find(s=>s.id===id);if(!s||s.disabled)return false;b.energy-=s.cost;b.turnTaken=true;b.lastAction=s.name;for(const key in b.cooldowns)b.cooldowns[key]=Math.max(0,b.cooldowns[key]-1);if(s.cd)b.cooldowns[s.id]=s.cd;
+function playerTurn(b,id){const s=available(b).find(s=>s.id===id);if(!s||s.disabled)return false;b.energy-=s.cost;b.turnTaken=true;b.lastAction=s.name;for(const key in b.cooldowns)b.cooldowns[key]=Math.max(0,b.cooldowns[key]-1);if(s.cd)b.cooldowns[s.id]=s.cd;
  const next=intent(b);b.repeat=b.lastId===id?b.repeat+1:0;b.lastId=id;let damage=s.damage||0;let stagger=0;const wasBroken=b.broken>0;if(wasBroken)b.broken--;if(b.repeat>=1&&damage){damage=Math.round(damage*.55);add(b,'同一套话术被识破！换招才能打足伤害。')}if(s.name===b.profile.weak)stagger=2;else if(['invoice','scope','meeting','coupon'].includes(id))stagger=1;
  if(s.name===b.profile.weak){damage=Math.round(damage*1.65);add(b,'戳中弱点！对方的气势开始摇晃。')}
  if(id==='ultimate'){b.morale=0;b.hp=Math.min(120,b.hp+18);add(b,'终结技！打工人的晚霞不可辜负。')}if(id==='evidence'){b.evidence--;stagger=3;add(b,'白纸黑字摆上桌，对方无法继续打太极。')}if(id==='counter'){if(next[2]==='heavy'){b.shield+=next[1];damage=26;stagger=2;add(b,'精准反制！重击全挡，原话奉还。')}else{b.shield+=8;add(b,'反制时机不对，只获得 8 护盾。')}}
@@ -41,10 +41,13 @@ function takeTurn(b,id){const s=available(b).find(s=>s.id===id);if(!s||s.disable
  if(wasBroken&&damage){damage=Math.round(damage*1.5);add(b,'破防追击！伤害 ×1.5。')}if(b.enemyShield&&damage&& !['ultimate','evidence'].includes(id)){const block=Math.min(damage,b.enemyShield);damage-=block;b.enemyShield-=block;add(b,'对方用流程护盾挡下 '+block+'。')}if(!wasBroken&&stagger){b.stance=Math.max(0,b.stance-stagger);if(b.stance===0){b.broken=2;b.skip=1;b.stance=3;add(b,'BREAK！架势崩溃，本回合行动取消，接下来两招增伤。')}}b.morale=Math.min(100,b.morale+14+(stagger?6:0));b.enemyHp=Math.max(0,b.enemyHp-damage);add(b,`${s.name}${damage?'：对方气势 -'+damage:'：准备好了！'}`);
  if(b.dotTurns>0&&b.enemyHp>0){b.enemyHp=Math.max(0,b.enemyHp-b.dot);b.dotTurns--;add(b,'流程还在走，对方气势 -6。')}
  if(b.enemyHp<=0){b.phase='won';add(b,'对方的职场气势归零，论战获胜！');return true}
+ b.pendingIntent=next;b.phase='enemy';return true}
+function enemyTurn(b){if(b.phase!=='enemy')return false;const next=b.pendingIntent||intent(b);delete b.pendingIntent;
  if(b.stage===1&&['gm','vice'].includes(b.role)&&b.enemyHp<=b.maxEnemyHp*.5){b.stage=2;b.enemyShield=18;add(b,'第二阶段：老板撕掉日程表！获得 18 护盾，后续伤害 +8。')}const [title,power,kind]=next;
  if(b.skip>0){b.skip--;add(b,`对方被打断，跳过「${title}」。`)}
  else {const absorbed=Math.min(b.shield,power);b.shield-=absorbed;const loss=power-absorbed;b.hp=Math.max(0,b.hp-loss);if(kind==='drain')b.energy=Math.max(0,b.energy-2);add(b,`${title}：${power?`心态 -${loss}${absorbed?'（护盾挡下 '+absorbed+'）':''}`:'对方正在蓄力，下一回合要小心。'}${kind==='drain'?'，灵感 -2':''}`)}
- if(b.ally&&!b.allyUsed&&b.hp>0&&b.hp<50){b.allyUsed=true;b.hp=Math.min(120,b.hp+25);add(b,'阿炭奶茶支援！心态 +25（每场一次）。')}b.moveIndex++;if(b.hp<=0){b.phase='lost';add(b,'心态归零，今天先被工作留住了。');return true}b.energy=Math.min(10,b.energy+1);b.turn++;return true}
+ if(b.ally&&!b.allyUsed&&b.hp>0&&b.hp<50){b.allyUsed=true;b.hp=Math.min(120,b.hp+25);add(b,'阿炭奶茶支援！心态 +25（每场一次）。')}b.moveIndex++;if(b.hp<=0){b.phase='lost';add(b,'心态归零，今天先被工作留住了。');return true}b.energy=Math.min(10,b.energy+1);b.turn++;b.phase='player';return true}
+function takeTurn(b,id){if(!playerTurn(b,id))return false;if(b.phase==='enemy')enemyTurn(b);return true}
 function retreat(b){if(b.phase!=='player'||b.energy<3)return false;b.energy-=3;b.phase='escaped';add(b,'花 3 灵感打个圆场，暂时脱身。');return true}
-return{create,available,intent,takeTurn,retreat,profiles};
+return{create,available,intent,playerTurn,enemyTurn,takeTurn,retreat,profiles};
 });
